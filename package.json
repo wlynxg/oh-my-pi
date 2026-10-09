@@ -4,16 +4,33 @@
   "private": true,
   "type": "module",
   "description": "Personal Pi workflow skills with adaptive execution and upstream tracking",
-  "keywords": ["pi-package", "skills", "workflow"],
+  "keywords": [
+    "pi-package",
+    "skills",
+    "workflow"
+  ],
   "pi": {
-    "extensions": ["./extensions/skills-status.js", "./extensions/fast-mode.js"],
-    "skills": ["./skills"]
+    "extensions": [
+      "./extensions/skills-status.js",
+      "./extensions/fast-mode.js",
+      "./extensions/codex-accounts.js"
+    ],
+    "skills": [
+      "./skills"
+    ]
   },
   "scripts": {
     "validate": "node scripts/validate-skills.mjs",
     "sync": "node scripts/sync-skills.mjs",
     "test:sync": "node scripts/test-sync.mjs",
     "test:extension": "node scripts/test-extension.mjs",
-    "test:fast-mode": "node --test scripts/test-fast-mode.mjs"
+    "test:fast-mode": "node --test scripts/test-fast-mode.mjs",
+    "test:accounts": "node --test scripts/test-codex-accounts.mjs"
+  },
+  "dependencies": {
+    "proper-lockfile": "^4.1.2"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
   }
 }

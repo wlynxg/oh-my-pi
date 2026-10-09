@@ -123,6 +123,38 @@ adaptive-workflow*3, debugging-with-evidence*1
 
 依据：[OpenAI API Fast mode](https://developers.openai.com/api/docs/guides/fast-mode)、[Codex Speed](https://developers.openai.com/codex/speed)、[Anthropic Service tiers](https://docs.claude.com/en/api/service-tiers)、[Gemini Priority inference](https://ai.google.dev/gemini-api/docs/priority-inference)、[xAI Priority Processing](https://docs.x.ai/developers/advanced-api-usage/priority-processing)。
 
+## Codex 多账号
+
+`extensions/codex-accounts.js` 扩展复用 Pi 原生 `/login openai-codex` 和 OAuth 刷新，不覆盖 provider，也不安装第三方账号插件。Pi 的 `auth.json` 每个 provider 只有一个活跃凭证槽；本扩展将其他登录以 OAuth 凭据快照写在个人 agent 目录的 `codex-accounts.json`，文件权限设为 `0600`，内容包含可长期使用的 refresh token。请保护整个 `~/.pi/agent` 目录并避免同步到不可信位置；本地文件权限不等同于静态加密。
+
+首次保存当前账号，再登录并保存其他账号：
+
+```text
+/login openai-codex
+/account save personal
+/login openai-codex
+/account save work
+/account list
+/account switch personal
+/account usage
+```
+
+支持 `/account`（打开选择器）、`save [名称]`、`switch [名称]`、`list`、`remove [名称]`、`usage`。不写名称时优先用当前登录邮箱，取不到时使用账号 ID；账号以 OAuth access token 中的 `chatgpt_account_id` 识别，避免重复保存产生重复条目。
+
+**切换是全局的：** active Codex 登录写回 `auth.json`，同 agent 目录的其他 Pi 会话后续请求也会使用切换后的账号。为避免请求中途换号，当前会话忙碌时拒绝切换；如多个 Pi 进程并行使用同一 agent 目录，不要在另一个进程发请求期间切换。切换前会保存 Pi 已轮换的 token，并使用 Pi 的文件变更重载、refresh-token 流程；其他 provider 的认证不会改变。移除只删本地快照，不会退出或撤销平台账号。不要同时运行其他会改写同一 `openai-codex` 凭据槽的账号扩展。
+
+`/account list` 会显示当前账号和已有额度快照；`/account usage` 通过账号专属 bearer token 与 `ChatGPT-Account-Id` 查询 `https://chatgpt.com/backend-api/wham/usage`，并校验响应账号 ID。状态栏对 Codex 显示账号名、主/次窗口剩余百分比和快照时间。请求响应头/流事件也可更新快照；无法判断或数据过期时显示未知/待刷新，而不是估算。达到限制或收到 429 时提示 `/account switch`，**不会自动换号、重试请求或消费另一个账号额度**。
+
+**额度接口限制：** `wham/usage` 是 Codex 当前使用但未作为稳定公开 API 承诺的端点；平台返回 403/432、限流、网络错误或字段变化时，命令报告查询失败，保留之前快照，不把错误当作余额 0。Codex 可以有额外模型额度窗和 credits；返回 `null` 的余额显示为未知，接口未返回的项不会猜测。剩余比例与重置时间是快照，不是实时保证；最终额度以 ChatGPT/Codex 官方用量页面为准。
+
+### 验证
+
+```bash
+npm run test:accounts
+```
+
+覆盖凭据保存/轮换/切换、账号身份、文件权限/锁、异常数据、额度解析和命令行为；测试使用假 token 和模拟接口，不会进行真实 OAuth 登录或触碰现有 `auth.json`。
+
 ## Skill 来源
 
 这些 skills 是针对 Pi 的本地改写和组合，不是对上游仓库的整套复制：
@@ -167,6 +199,7 @@ npm run validate
 npm run test:sync
 npm run test:extension
 npm run test:fast-mode
+npm run test:accounts
 git diff --check
 ```
 

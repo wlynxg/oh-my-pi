@@ -1,4 +1,6 @@
 node_modules/
+**/codex-accounts.json
+**/codex-accounts.json.*.tmp
 reports/*.md
 reports/*.json
 reports/workflow-evaluation/
