@@ -25,7 +25,8 @@
     "test:sync": "node scripts/test-sync.mjs",
     "test:extension": "node scripts/test-extension.mjs",
     "test:fast-mode": "node --test scripts/test-fast-mode.mjs",
-    "test:accounts": "node --test scripts/test-codex-accounts.mjs"
+    "test:accounts": "node --test scripts/test-codex-accounts.mjs",
+    "test:opencode-usage": "node --test scripts/test-opencode-usage.mjs"
   },
   "dependencies": {
     "proper-lockfile": "^4.1.2"

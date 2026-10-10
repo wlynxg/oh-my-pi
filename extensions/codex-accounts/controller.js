@@ -1,5 +1,6 @@
 import { PROVIDER } from "./storage.js";
 import { formatQuota, formatReport, isExhausted, parseHeaders, parseRateEvent, queryUsage } from "./usage.js";
+import { GO_PROVIDER, formatGoQuota, formatGoReport, queryGoUsage, resolveGoAuth } from "./opencode-go.js";
 
 const COMMAND = "account";
 const STATUS_KEY = "codex-accounts";
@@ -10,9 +11,12 @@ const ERROR = "error";
 const WARNING = "warning";
 const HELP = "/account [save 名称 | switch 名称 | list | remove 名称 | usage]\n先 /login openai-codex，再 /account save；添加另一账号前请先保存当前登录。";
 const UNSAVED = "未保存";
+const TUI_MODE = "tui";
 
 export function registerAccounts(pi, store, { fetchImpl = globalThis.fetch } = {}) {
   let latestUsage;
+  let latestGoUsage;
+  let displayProvider;
   let requestAccount;
   let warned = false;
 
@@ -21,15 +25,41 @@ export function registerAccounts(pi, store, { fetchImpl = globalThis.fetch } = {
     else pi.sendMessage({ customType: MESSAGE_TYPE, content: text, display: true }, { triggerTurn: false });
   }
 
-  function clear(ctx) { if (ctx.mode === "tui") ctx.ui.setStatus(STATUS_KEY, undefined); }
+  function clear(ctx) { if (ctx.mode === TUI_MODE) ctx.ui.setStatus(STATUS_KEY, undefined); }
 
   function quota(id, accounts) {
     const saved = accounts[id]?.usage;
     return latestUsage?.id === id && (!saved || latestUsage.report.capturedAt >= saved.capturedAt) ? latestUsage.report : saved;
   }
 
+  function showGo(ctx) {
+    if (ctx.mode !== TUI_MODE || displayProvider !== GO_PROVIDER) return;
+    const report = latestGoUsage?.report;
+    const time = report ? ` · 快照 ${new Date(report.capturedAt).toLocaleTimeString()}` : "";
+    ctx.ui.setStatus(STATUS_KEY, `Go · ${formatGoQuota(report)}${time}`);
+  }
+
+  async function goAuth(ctx) {
+    try { return await resolveGoAuth(ctx.modelRegistry); }
+    catch (error) {
+      latestGoUsage = undefined;
+      showGo(ctx);
+      throw error;
+    }
+  }
+
+  async function refreshGo(ctx) {
+    if (latestGoUsage) {
+      const auth = await goAuth(ctx);
+      if (auth.tag !== latestGoUsage?.tag) latestGoUsage = undefined;
+    }
+    showGo(ctx);
+  }
+
   function refresh(_event, ctx) {
-    if (ctx.mode !== "tui") return;
+    displayProvider = ctx.model?.provider;
+    if (ctx.mode !== TUI_MODE) return;
+    if (displayProvider === GO_PROVIDER) return refreshGo(ctx);
     if (ctx.model?.provider !== PROVIDER) { clear(ctx); return; }
     try {
       const { current, accounts } = store.view();
@@ -44,7 +74,7 @@ export function registerAccounts(pi, store, { fetchImpl = globalThis.fetch } = {
     }
   }
 
-  function list(ctx) {
+  async function list(ctx) {
     const { current, accounts } = store.view();
     const lines = Object.entries(accounts).map(([id, entry]) => {
       const report = quota(id, accounts);
@@ -52,7 +82,7 @@ export function registerAccounts(pi, store, { fetchImpl = globalThis.fetch } = {
     });
     if (current && !accounts[current.id]) lines.unshift(`● 当前登录${UNSAVED}，请先 /account save。`);
     notify(ctx, lines.join("\n") || "尚无已保存账号，请先 /login openai-codex，再 /account save。");
-    refresh({}, ctx);
+    await refresh({}, ctx);
   }
 
   async function choose(ctx, suppliedName, action) {
@@ -73,14 +103,33 @@ export function registerAccounts(pi, store, { fetchImpl = globalThis.fetch } = {
   async function record(id, report, ctx) {
     latestUsage = { id, report };
     await store.recordUsage(id, report);
-    refresh({}, ctx);
+    await refresh({}, ctx);
     if (isExhausted(report) && !warned) {
       warned = true;
       notify(ctx, "Codex 额度窗口已到限制，可使用 /account switch 切换已保存账号；不会自动轮换。", WARNING);
     }
   }
 
+  async function goUsage(ctx) {
+    displayProvider = ctx.model?.provider;
+    const auth = await goAuth(ctx);
+    if (latestGoUsage?.tag !== auth.tag) latestGoUsage = undefined;
+    showGo(ctx);
+    const report = await queryGoUsage(auth.key, fetchImpl);
+    // 查询期间换了 API Key 不能把旧账号结果当成新账号额度。
+    const currentAuth = await goAuth(ctx);
+    if (currentAuth.tag !== auth.tag) {
+      latestGoUsage = undefined;
+      showGo(ctx);
+      throw new Error("OpenCode Go 登录在查询期间发生变化，请重新查询；未缓存旧账号结果。");
+    }
+    latestGoUsage = { tag: auth.tag, report };
+    showGo(ctx);
+    notify(ctx, formatGoReport(report));
+  }
+
   async function usage(ctx) {
+    if (ctx.model?.provider === GO_PROVIDER) return goUsage(ctx);
     if (!store.current()) throw new Error("没有 Codex 登录，请先 /login openai-codex。");
     // 原生解析负责到期刷新与轮换落盘；不复制 OAuth 逻辑，也不打印解析出的 token。
     let resolved;
@@ -97,7 +146,7 @@ export function registerAccounts(pi, store, { fetchImpl = globalThis.fetch } = {
   }
 
   pi.registerCommand(COMMAND, {
-    description: "保存和切换 Codex 账号，查询剩余额度（save/switch/list/remove/usage）",
+    description: "管理 Codex 账号，查询 Codex / 当前 OpenCode Go 剩余额度（save/switch/list/remove/usage）",
     getArgumentCompletions(prefix) {
       const match = prefix.match(/^(\S*)\s*([\s\S]*)$/);
       const operation = match?.[1] ?? "";
@@ -114,7 +163,7 @@ export function registerAccounts(pi, store, { fetchImpl = globalThis.fetch } = {
         if (operation === "save") {
           const saved = await store.save(name);
           notify(ctx, `已保存 Codex 账号：${saved.name}。`);
-          refresh({}, ctx);
+          await refresh({}, ctx);
         } else if (operation === "switch" || !operation) {
           if (!ctx.isIdle()) throw new Error("请先按 Esc 停止当前请求，待会话空闲后切换账号。");
           const id = await choose(ctx, name, "切换 Codex 账号");
@@ -129,7 +178,7 @@ export function registerAccounts(pi, store, { fetchImpl = globalThis.fetch } = {
           await ctx.reload();
           return; // 不复用已经失效的扩展上下文。
         } else if (operation === "list") {
-          list(ctx);
+          await list(ctx);
         } else if (operation === "usage") {
           await usage(ctx);
         } else if (operation === "remove") {
@@ -141,7 +190,7 @@ export function registerAccounts(pi, store, { fetchImpl = globalThis.fetch } = {
           await store.remove(id);
           if (latestUsage?.id === id) latestUsage = undefined;
           notify(ctx, "已移除快照；当前 auth.json 登录未改变。");
-          refresh({}, ctx);
+          await refresh({}, ctx);
         } else {
           notify(ctx, HELP);
         }
@@ -182,12 +231,14 @@ export function registerAccounts(pi, store, { fetchImpl = globalThis.fetch } = {
   pi.on("agent_settled", async (_event, ctx) => {
     if (ctx.model?.provider === PROVIDER) await store.syncActive();
     requestAccount = undefined;
-    refresh({}, ctx);
+    await refresh({}, ctx);
   });
   pi.on("session_shutdown", async (_event, ctx) => {
     clear(ctx);
+    displayProvider = undefined;
     requestAccount = undefined;
     latestUsage = undefined;
+    latestGoUsage = undefined;
     if (ctx.model?.provider === PROVIDER) await store.syncActive();
   });
 }

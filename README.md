@@ -143,14 +143,35 @@ adaptive-workflow*3, debugging-with-evidence*1
 
 **切换是全局的：** active Codex 登录写回 `auth.json`，同 agent 目录的其他 Pi 会话后续请求也会使用切换后的账号。为避免请求中途换号，当前会话忙碌时拒绝切换；如多个 Pi 进程并行使用同一 agent 目录，不要在另一个进程发请求期间切换。切换前会保存 Pi 已轮换的 token，并使用 Pi 的文件变更重载、refresh-token 流程；其他 provider 的认证不会改变。移除只删本地快照，不会退出或撤销平台账号。不要同时运行其他会改写同一 `openai-codex` 凭据槽的账号扩展。
 
-`/account list` 会显示当前账号和已有额度快照；`/account usage` 通过账号专属 bearer token 与 `ChatGPT-Account-Id` 查询 `https://chatgpt.com/backend-api/wham/usage`，并校验响应账号 ID。状态栏对 Codex 显示账号名、主/次窗口剩余百分比和快照时间。请求响应头/流事件也可更新快照；无法判断或数据过期时显示未知/待刷新，而不是估算。达到限制或收到 429 时提示 `/account switch`，**不会自动换号、重试请求或消费另一个账号额度**。
+`/account list` 会显示当前 Codex 账号和已有额度快照；`/account usage` 在当前模型提供方为 `opencode-go` 时查询 Go（见下节），其他情况下保持查询 Codex 的已有行为。Codex 查询通过账号专属 bearer token 与 `ChatGPT-Account-Id` 访问 `https://chatgpt.com/backend-api/wham/usage`，并校验响应账号 ID。状态栏对 Codex 显示账号名、主/次窗口剩余百分比和快照时间。请求响应头/流事件也可更新快照；无法判断或数据过期时显示未知/待刷新，而不是估算。达到限制或收到 429 时提示 `/account switch`，**不会自动换号、重试请求或消费另一个账号额度**。
 
 **额度接口限制：** `wham/usage` 是 Codex 当前使用但未作为稳定公开 API 承诺的端点；平台返回 403/432、限流、网络错误或字段变化时，命令报告查询失败，保留之前快照，不把错误当作余额 0。Codex 可以有额外模型额度窗和 credits；返回 `null` 的余额显示为未知，接口未返回的项不会猜测。剩余比例与重置时间是快照，不是实时保证；最终额度以 ChatGPT/Codex 官方用量页面为准。
+
+### OpenCode Go 额度
+
+已在 Pi 登录 OpenCode Go 的用户无需额外配置或再保存账号：在 `/model` 选择 `opencode-go` 模型，然后执行同一个命令：
+
+```text
+/account usage
+```
+
+复用 Pi 原生解析的 API Key，查询官方 `GET https://opencode.ai/zen/go/v1/usage`。显示 **5 小时、周、月剩余比例和重置时间**，例如：
+
+```text
+Go · 5h 剩余 100% · 周 剩余 95% · 月 剩余 93% · 快照 14:30:00
+```
+
+接口 `percent` 是已用比例，剩余为 `100 - percent`；受限窗口会标注“受限”，重置后的旧数据标注“待刷新”。**只在手动执行命令时查询**，启动/切换模型/每轮结束仅显示缓存，不新增定时轮询。Go 快照仅保存在当前扩展的内存中，重启或 `/reload` 后需再次查询；缓存按凭据指纹隔离，换 Key 不会沿用旧账号的数据。
+
+HTTP 错误、超时、无订阅或字段不完整会明确报告失败，同一凭据下保留带时间的最后成功快照，不伪造零额度。不复制保存 Key，不请求浏览器 Cookie，不改 Codex 登录或账号文件。**此接口只返回 Go 套餐窗口，不包含 Zen 余额**；`save/switch/list/remove` 仍仅管理 Codex 账号。
+
+依据：[官方额度路由](https://github.com/anomalyco/opencode/blob/dev/packages/console/app/src/routes/zen/go/v1/usage.ts)、[已合并 PR #16513](https://github.com/anomalyco/opencode/pull/16513)、[Go 官方文档](https://docs.opencode.ai/docs/go/)。自动测试使用假 Key；真实账号验证只查询额度，不发送模型生成请求。
 
 ### 验证
 
 ```bash
 npm run test:accounts
+npm run test:opencode-usage
 ```
 
 覆盖凭据保存/轮换/切换、账号身份、文件权限/锁、异常数据、额度解析和命令行为；测试使用假 token 和模拟接口，不会进行真实 OAuth 登录或触碰现有 `auth.json`。
@@ -200,6 +221,7 @@ npm run test:sync
 npm run test:extension
 npm run test:fast-mode
 npm run test:accounts
+npm run test:opencode-usage
 git diff --check
 ```
 
