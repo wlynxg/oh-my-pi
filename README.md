@@ -1,19 +1,19 @@
-# Personal Pi Skills
+# Oh My Pi
 
-一套为 Pi 定制的个人开发工作流：保留 superpowers 的需求理解和 skill 编写方法，吸收 ponytail 的复用与最小化原则，并把大需求变成可分段审查的交付物。当前包含 8 个 skills，另有 Pi 状态扩展；工作流底线以 `adaptive-workflow/SKILL.md` 为唯一来源，每轮实际注入，其他 skills 按需读取。
+面向个人使用的 Pi 扩展与开发工作流集合：包含 Fast 服务等级、Codex 多账号切换、Codex/OpenCode Go 额度查询，以及 8 个工作流 skills。工作流保留 superpowers 的需求理解和 skill 编写方法，吸收 ponytail 的复用与最小化原则；底线以 `adaptive-workflow/SKILL.md` 为唯一来源，每轮实际注入，其他 skills 按需读取。
 
 ## 安装
 
 推荐从 GitHub 安装，方便在其他设备上使用和更新：
 
 ```bash
-pi install git:github.com/wlynxg/skills@main
+pi install git:github.com/wlynxg/oh-my-pi@main
 ```
 
 更新到最新版本：
 
 ```bash
-pi update git:github.com/wlynxg/skills@main
+pi update git:github.com/wlynxg/oh-my-pi@main
 ```
 
 安装或更新后运行 `/reload`，或者重启 Pi。确认当前安装来源：
@@ -25,10 +25,23 @@ pi list
 本地仓库路径只用于开发和调试：
 
 ```bash
-pi install /root/skills
+pi install /root/oh-my-pi
 ```
 
 同一环境只保留 GitHub 或本地其中一种来源，避免同一套 skills 被重复加载。若同时使用上游 Superpowers，建议在 `pi config` 中关闭它的自动 bootstrap 扩展，只保留需要时显式调用的 skills。
+
+### 从旧 skills 包迁移
+
+已有 Git 来源安装先移除旧声明，再安装新仓库：
+
+```bash
+pi remove git:github.com/wlynxg/skills@main
+pi install git:github.com/wlynxg/oh-my-pi@main
+```
+
+然后 `/reload` 或重启 Pi。若之前安装的是本地路径，使用 `pi list` 显示的旧来源执行 `pi remove`；不要同时加载旧、新仓库，否则命令会重复注册。
+
+本仓保留原仓库完整 Git 历史、技能名称与历史会话计数标识，不迁移或修改个人 `auth.json`、Codex 账号快照。历史设计记录保留原名。
 
 ## 工作模式
 

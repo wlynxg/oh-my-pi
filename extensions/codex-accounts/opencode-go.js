@@ -37,7 +37,7 @@ export async function queryGoUsage(key, fetchImpl = globalThis.fetch) {
   let response;
   try {
     response = await fetchImpl(GO_USAGE_URL, {
-      headers: { Authorization: `Bearer ${key}`, "User-Agent": "personal-pi-skills/0.1.0" },
+      headers: { Authorization: `Bearer ${key}`, "User-Agent": "oh-my-pi/0.1.0" },
       signal: AbortSignal.timeout(TIMEOUT_MS), redirect: "error",
     });
   } catch {
