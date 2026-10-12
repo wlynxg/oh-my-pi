@@ -1,6 +1,6 @@
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import lockfile from "proper-lockfile";
 
 export const PROVIDER = "openai-codex";
@@ -9,7 +9,8 @@ const AUTH_FILE = "auth.json";
 const OAUTH = "oauth";
 const AUTH_CLAIM = "https://api.openai.com/auth";
 const PROFILE_CLAIM = "https://api.openai.com/profile";
-const STORE_VERSION = 1;
+const STORE_VERSION = 2;
+const LEGACY_STORE_VERSION = 1;
 const PRIVATE_MODE = 0o600;
 const RESERVED_IDS = new Set(["__proto__", "constructor", "prototype"]);
 const NO_LOGIN = "没有可保存的 Codex OAuth 登录，请先执行 /login openai-codex。";
@@ -36,14 +37,21 @@ export function credentialInfo(credential) {
     throw new Error("Codex OAuth 凭据格式无效，不修改任何登录。");
   }
   const claims = tokenClaims(credential.access);
-  const tokenId = claims[AUTH_CLAIM]?.chatgpt_account_id;
-  const id = credential.accountId ?? tokenId;
-  if (typeof id !== "string" || !/^[\w-]{1,200}$/.test(id) || RESERVED_IDS.has(id) ||
-      (tokenId !== undefined && tokenId !== id)) {
+  const auth = claims[AUTH_CLAIM];
+  const tokenId = auth?.chatgpt_account_id;
+  const accountId = credential.accountId ?? tokenId;
+  if (typeof accountId !== "string" || !/^[\w-]{1,200}$/.test(accountId) || RESERVED_IDS.has(accountId) ||
+      (tokenId !== undefined && tokenId !== accountId)) {
     throw new Error("Codex 账号身份缺失或与 token 不一致，不修改任何登录。");
   }
+  const userId = auth?.chatgpt_user_id ?? auth?.user_id ?? claims.sub;
+  if (typeof userId !== "string" || !userId || userId.length > 200 || /\s|[\x00-\x1f\x7f]/.test(userId)) {
+    throw new Error("Codex 用户身份缺失或无效，拒绝合并或覆盖账号；请检查登录或旧快照，原文件保持不变。");
+  }
+  // 工作区 ID 不是用户 ID；同一用户与工作区组成独立登录，轮换 token 不改变快照键。
+  const id = createHash("sha256").update(JSON.stringify([PROVIDER, userId, accountId])).digest("hex");
   const email = claims.email ?? claims[PROFILE_CLAIM]?.email;
-  return { id, email: typeof email === "string" && /^[^\s@]+@[^\s@]+$/.test(email) && email.length <= 80 ? email : undefined };
+  return { id, accountId, userId, email: typeof email === "string" && /^[^\s@]+@[^\s@]+$/.test(email) && email.length <= 80 ? email : undefined };
 }
 
 function validName(name) {
@@ -97,15 +105,20 @@ export class AccountStore {
 
   readAccounts() {
     const store = readJson(this.accountsPath, EMPTY_STORE);
-    if (store.version !== STORE_VERSION || !isRecord(store.accounts)) {
+    if (![STORE_VERSION, LEGACY_STORE_VERSION].includes(store.version) || !isRecord(store.accounts)) {
       throw new Error("账号快照格式不匹配，拒绝覆盖；请勿混用其他账号扩展。");
     }
-    store.accounts = Object.assign(Object.create(null), store.accounts);
-    for (const [id, entry] of Object.entries(store.accounts)) {
-      if (!isRecord(entry) || credentialInfo(entry.credential).id !== id) throw new Error("账号快照身份不一致，拒绝覆盖。");
+    const accounts = Object.create(null);
+    for (const [key, entry] of Object.entries(store.accounts)) {
+      if (!isRecord(entry)) throw new Error("账号快照身份不一致，拒绝覆盖。");
+      const identity = credentialInfo(entry.credential);
+      const expected = store.version === LEGACY_STORE_VERSION ? identity.accountId : identity.id;
+      if (key !== expected) throw new Error("账号快照身份不一致，拒绝覆盖。");
       validName(entry.name);
+      accounts[identity.id] = entry;
     }
-    return store;
+    // v1 只在读取边界内存升级；原名称、凭据、额度与时间保留，写入仍经原锁和原子保存。
+    return { ...store, version: STORE_VERSION, accounts };
   }
 
   readAuth() { return readJson(this.authPath, {}); }
@@ -175,14 +188,15 @@ export class AccountStore {
     return this.locked([this.authPath, this.accountsPath], (check) => {
       const credential = this.readAuth()[PROVIDER];
       if (!credential) return undefined;
-      const { id } = credentialInfo(credential);
+      const identity = credentialInfo(credential);
+      const { id } = identity;
       const store = this.readAccounts();
       if (store.accounts[id] && JSON.stringify(store.accounts[id].credential) !== JSON.stringify(credential)) {
         this.put(store, credential);
         check();
         atomicWrite(this.accountsPath, store);
       }
-      return { id, credential };
+      return { ...identity, credential };
     });
   }
 

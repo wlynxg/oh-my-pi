@@ -139,7 +139,7 @@ export function registerAccounts(pi, store, { fetchImpl = globalThis.fetch } = {
     if (!active || resolved?.auth?.apiKey !== active.credential.access) {
       throw new Error("当前认证已变化或被覆盖，请重试；不使用不匹配的凭据查询额度。");
     }
-    const report = await queryUsage(active.credential, active.id, fetchImpl);
+    const report = await queryUsage(active.credential, active.accountId, fetchImpl);
     await record(active.id, report, ctx);
     const entry = store.readAccounts().accounts[active.id];
     notify(ctx, `${entry?.name ?? UNSAVED}\n${formatReport(report)}`);

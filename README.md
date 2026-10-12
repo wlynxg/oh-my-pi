@@ -152,11 +152,17 @@ adaptive-workflow*3, debugging-with-evidence*1
 /account usage
 ```
 
-支持 `/account`（打开选择器）、`save [名称]`、`switch [名称]`、`list`、`remove [名称]`、`usage`。不写名称时优先用当前登录邮箱，取不到时使用账号 ID；账号以 OAuth access token 中的 `chatgpt_account_id` 识别，避免重复保存产生重复条目。
+支持 `/account`（打开选择器）、`save [名称]`、`switch [名称]`、`list`、`remove [名称]`、`usage`。不写名称时优先用当前登录邮箱，取不到时使用快照键。快照以 **用户身份＋工作区** 识别：用户优先取 OAuth token 中的 `chatgpt_user_id`，其次 `user_id`／`sub`；`chatgpt_account_id` 是组织／工作区 ID，不能单独用它去重。同工作区不同用户分别保存，同一用户 token 轮换或邮箱变化不会仅因此生成重复快照。原生 OAuth 的 `accountId` 与额度请求 header 仍保留工作区 ID。
+
+**旧快照升级：** 修复版本写入 v2 格式。读取 v1 时只在内存转换，保留名称、凭据、保存时间和额度快照，不立即改文件；后续确需保存、同步、切换、删除或额度写入时，在原锁与原子保存边界落盘 v2。用户身份缺失、格式或键不匹配时明确报错并保留原文件，不用邮箱猜测、不删除无法识别的条目。旧版本已经覆盖丢失的凭据无法自动恢复。
+
+**升级前让相关 Pi 实例统一更新／重载，不能混用新旧账号扩展。** 旧插件不能读取 v2，应停止旧实例的账号操作。只修改本地仓库不会更新已安装 Git 包；`/reload` 加载的是实际安装来源，必须先应用包含修复的包版本。
 
 **切换是全局的：** active Codex 登录写回 `auth.json`，同 agent 目录的其他 Pi 会话后续请求也会使用切换后的账号。为避免请求中途换号，当前会话忙碌时拒绝切换；如多个 Pi 进程并行使用同一 agent 目录，不要在另一个进程发请求期间切换。切换前会保存 Pi 已轮换的 token，并使用 Pi 的文件变更重载、refresh-token 流程；其他 provider 的认证不会改变。移除只删本地快照，不会退出或撤销平台账号。不要同时运行其他会改写同一 `openai-codex` 凭据槽的账号扩展。
 
 `/account list` 会显示当前 Codex 账号和已有额度快照；`/account usage` 在当前模型提供方为 `opencode-go` 时查询 Go（见下节），其他情况下保持查询 Codex 的已有行为。Codex 查询通过账号专属 bearer token 与 `ChatGPT-Account-Id` 访问 `https://chatgpt.com/backend-api/wham/usage`，并校验响应账号 ID。状态栏对 Codex 显示账号名、主/次窗口剩余百分比和快照时间。请求响应头/流事件也可更新快照；无法判断或数据过期时显示未知/待刷新，而不是估算。达到限制或收到 429 时提示 `/account switch`，**不会自动换号、重试请求或消费另一个账号额度**。
+
+身份字段依据：[OpenAI 官方 token 数据定义](https://github.com/openai/codex/blob/main/codex-rs/login/src/token_data.rs)。
 
 **额度接口限制：** `wham/usage` 是 Codex 当前使用但未作为稳定公开 API 承诺的端点；平台返回 403/432、限流、网络错误或字段变化时，命令报告查询失败，保留之前快照，不把错误当作余额 0。Codex 可以有额外模型额度窗和 credits；返回 `null` 的余额显示为未知，接口未返回的项不会猜测。剩余比例与重置时间是快照，不是实时保证；最终额度以 ChatGPT/Codex 官方用量页面为准。
 

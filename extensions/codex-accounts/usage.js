@@ -1,4 +1,4 @@
-import { isRecord } from "./storage.js";
+import { credentialInfo, isRecord } from "./storage.js";
 
 export const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const PRIORITY_HEADER_PREFIX = "x-codex";
@@ -113,11 +113,13 @@ export function parseRateEvent(event, capturedAt = Date.now()) {
   }
 }
 
-export async function queryUsage(credential, id, fetchImpl = globalThis.fetch) {
+export async function queryUsage(credential, accountId, fetchImpl = globalThis.fetch) {
+  // 请求路由仍使用工作区，不能把本地用户快照键发给平台。
+  if (credentialInfo(credential).accountId !== accountId) throw new Error("额度查询工作区身份不匹配，拒绝发送凭据。");
   let response;
   try {
     response = await fetchImpl(USAGE_URL, {
-      headers: { Authorization: `Bearer ${credential.access}`, "ChatGPT-Account-Id": id, "User-Agent": "pi-codex-accounts" },
+      headers: { Authorization: `Bearer ${credential.access}`, "ChatGPT-Account-Id": accountId, "User-Agent": "pi-codex-accounts" },
       signal: AbortSignal.timeout(USAGE_TIMEOUT_MS), redirect: "error",
     });
   } catch {
@@ -127,7 +129,7 @@ export async function queryUsage(credential, id, fetchImpl = globalThis.fetch) {
   let payload;
   try { payload = await response.json(); } catch { throw new Error("额度接口响应不是有效 JSON。"); }
   if (!isRecord(payload)) throw new Error("额度接口响应结构无效。");
-  if (payload.account_id !== undefined && payload.account_id !== id) throw new Error("额度响应账号身份不匹配，拒绝归入当前账号。");
+  if (payload.account_id !== undefined && payload.account_id !== accountId) throw new Error("额度响应账号身份不匹配，拒绝归入当前账号。");
   return parseUsage(payload);
 }
 
