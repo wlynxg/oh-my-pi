@@ -41,7 +41,7 @@ pi install git:github.com/wlynxg/oh-my-pi@main
 
 然后 `/reload` 或重启 Pi。若之前安装的是本地路径，使用 `pi list` 显示的旧来源执行 `pi remove`；不要同时加载旧、新仓库，否则命令会重复注册。
 
-本仓保留原仓库完整 Git 历史、技能名称与历史会话计数标识，不迁移或修改个人 `auth.json`、Codex 账号快照。历史设计记录保留原名。
+本仓保留原仓库完整 Git 历史、技能名称与历史会话文件，不迁移或修改个人 `auth.json`、Codex 账号快照。历史设计记录保留原名。
 
 ## 工作模式
 
@@ -76,21 +76,9 @@ pi install git:github.com/wlynxg/oh-my-pi@main
 
 默认回答先给核心结论：纯问答、确认或状态查询保持 1-3 句，需要枚举时使用紧凑列表；实际改动时才简短说明变更、验证和必要风险。最终答复额外用两行 `不确定：...`、`遗漏：...` 暴露真实缺口，每行一句；用户要求精确字符串、机器可读格式或仅输出命令结果时除外。只有用户要求细节、存在阻塞，或任务本身属于深度设计、审查、调试时才展开。
 
-## 状态
+## 技能与工作流入口
 
-Pi 底部状态会显示唯一 skill 数和总使用次数：
-
-```text
-🐂🐎 2 skills / 4 uses
-```
-
-编辑器上方显示当前 Pi 会话累计观测到的 skill 及每个 skill 的使用次数：
-
-```text
-adaptive-workflow*3, debugging-with-evidence*1
-```
-
-同一个请求内通过原始命令、展开的 skill block、完整正文注入或成功读取 `SKILL.md` 等途径观测到同一个 skill，只计一次；下一次请求再次使用才增加计数。读取失败不增加计数。`adaptive-workflow` 自动计数来自完整正文实际注入，不是只注入简化提示就标成使用；观测到仍不等于模型遵守。
+不再显示技能次数、统计状态或统计 widget，也不再读取或写入技能使用计数。`/skills` 仅列出可用技能；技能加载、完整工作流正文注入与模式快捷命令保持不变。旧会话中的统计记录保留，不清理或改写历史文件。更新插件后 `/reload` 或重启 Pi 生效，旧界面由 Pi 原生重载流程清理。
 
 扩展不是工具审批或操作系统沙箱，不能保证阻止所有违规操作；没有默认引入新的审批状态机。
 
@@ -118,7 +106,7 @@ adaptive-workflow*3, debugging-with-evidence*1
 
 图像、语音、embedding 等非文本推理变体不注入。Anthropic Claude 不注入：官方 `service_tier` 只有 `auto`/`standard_only`，默认 `auto` 已在有优先容量时自动使用，且新容量承诺已停售，没有可强制开启的 Fast 值。Azure Provisioned/PTU 与 Vertex 均为部署级容量，不属于请求参数。
 
-当前模型适用且开关开启时，原生状态栏显示 `⚡ Fast`；关闭、切到非适用模型或退出时移除。不替换 footer，不影响技能计数。
+当前模型适用且开关开启时，原生状态栏显示 `⚡ Fast`；关闭、切到非适用模型或退出时移除。不替换 footer，不影响其他扩展状态。
 
 在 `~/.pi/agent/settings.json` 或项目 `.pi/settings.json` 中配置：
 

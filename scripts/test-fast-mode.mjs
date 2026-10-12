@@ -19,8 +19,8 @@ const GOOGLE_API = "google-generative-ai";
 const AZURE_API = "azure-openai-responses";
 const FOREIGN_API = "anthropic-messages";
 const FOREIGN_ID = "claude-sonnet-4-5";
-const SKILLS_STATUS_KEY = "personal-pi-skills";
-const SKILLS_STATUS = "🐂🐎 2 skills / 4 uses";
+const OTHER_STATUS_KEY = "fixture-other-status";
+const OTHER_STATUS = "other extension status";
 const OPENAI_CHAT_APIS = [RESPONSE_API, "openai-codex-responses", COMPLETIONS_API, AZURE_API];
 const REQUEST_EVENT = "before_provider_request";
 const START_EVENT = "session_start";
@@ -31,7 +31,7 @@ const STOP_EVENT = "session_shutdown";
 function harness(initial = {}, model = { id: GPT_ID, api: RESPONSE_API }) {
   let settings = initial;
   const handlers = new Map();
-  const statuses = new Map([[SKILLS_STATUS_KEY, SKILLS_STATUS]]);
+  const statuses = new Map([[OTHER_STATUS_KEY, OTHER_STATUS]]);
   const ctx = {
     model,
     hasUI: true,
@@ -159,7 +159,7 @@ test("启动、模型切换、配置刷新与退出正确更新闪电状态", ()
   const fixture = harness();
   fixture.emit(START_EVENT);
   assert.equal(fixture.statuses.get(STATUS_KEY), STATUS_LABEL);
-  assert.equal(fixture.statuses.get(SKILLS_STATUS_KEY), SKILLS_STATUS);
+  assert.equal(fixture.statuses.get(OTHER_STATUS_KEY), OTHER_STATUS);
 
   fixture.ctx.model = { id: FOREIGN_ID, api: FOREIGN_API };
   fixture.emit(SELECT_EVENT);
@@ -177,7 +177,7 @@ test("启动、模型切换、配置刷新与退出正确更新闪电状态", ()
   assert.equal(fixture.statuses.get(STATUS_KEY), STATUS_LABEL);
   fixture.emit(STOP_EVENT);
   assert.equal(fixture.statuses.has(STATUS_KEY), false);
-  assert.equal(fixture.statuses.get(SKILLS_STATUS_KEY), SKILLS_STATUS);
+  assert.equal(fixture.statuses.get(OTHER_STATUS_KEY), OTHER_STATUS);
 });
 
 test("不缓存开关，遵循 Pi 返回的有效配置", () => {

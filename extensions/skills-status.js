@@ -2,8 +2,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ICON = "🐂🐎";
-const ENTRY_TYPE = "personal-pi-skills";
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SYNC_SCRIPT = join(PACKAGE_ROOT, "scripts", "sync-skills.mjs");
 const ADAPTIVE_SKILL = "adaptive-workflow";
@@ -48,10 +46,6 @@ const MODE_LABELS = {
   debug: "证据调试",
 };
 
-function normalizedPath(path) {
-  return resolve(String(path || ""));
-}
-
 function getModeFromPrompt(prompt) {
   const text = String(prompt || "").trim();
   for (const [prefix, mode] of MODE_PREFIXES) {
@@ -67,24 +61,6 @@ function compactNames(names, empty = "-") {
   return list.length > 0 ? list.join(", ") : empty;
 }
 
-function formatSkillCounts(counts, empty = "-") {
-  const list = [...counts.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, count]) => `${name}*${count}`);
-  return list.length > 0 ? list.join(", ") : empty;
-}
-
-function totalSkillUses(counts) {
-  let total = 0;
-  for (const count of counts.values()) total += count;
-  return total;
-}
-
-function addSkillCount(counts, name, amount = 1) {
-  if (!name || !Number.isInteger(amount) || amount <= 0) return;
-  counts.set(name, (counts.get(name) || 0) + amount);
-}
-
 function buildPolicy(mode) {
   const selected = mode === "auto" ? "自动判断 fast / normal / deep" : MODE_LABELS[mode] || mode;
   // 每轮读取同一份正文，避免入口提示与 skill 的确认、兼容和验收规则漂移。
@@ -94,72 +70,8 @@ function buildPolicy(mode) {
   return `<!-- personal-pi-mode:${mode} -->\n<skill name="${ADAPTIVE_SKILL}" location="${ADAPTIVE_SKILL_PATH}">\n${guide}\n</skill>\n当前请求模式：${selected}。${MODE_POLICIES[mode] || ""}`;
 }
 
-function skillNameFromPath(filePath, knownSkills) {
-  const normalized = normalizedPath(filePath);
-  for (const [name, skill] of knownSkills) {
-    if (normalized === normalizedPath(skill.filePath)) return name;
-  }
-  if (!normalized.endsWith(`/${SKILL_FILENAME}`)) return undefined;
-  const parent = normalized.split("/").at(-2);
-  return parent && /^[a-z0-9-]+$/.test(parent) ? parent : undefined;
-}
-
 export default function personalPiSkillsExtension(pi) {
   let nextOverride;
-  let activeMode = "auto";
-  let lastPrompt;
-  let currentSkills = new Set();
-  let sessionSkillCounts = new Map();
-  let knownSkills = new Map();
-  let lastCtx;
-
-  function render(ctx = lastCtx) {
-    if (!ctx?.ui) return;
-    lastCtx = ctx;
-    const uniqueSkills = sessionSkillCounts.size;
-    const uses = totalSkillUses(sessionSkillCounts);
-    const status = `${ICON} ${uniqueSkills} skill${uniqueSkills === 1 ? "" : "s"} / ${uses} use${uses === 1 ? "" : "s"}`;
-    ctx.ui.setStatus("personal-pi-skills", status);
-    ctx.ui.setWidget("personal-pi-skills", [formatSkillCounts(sessionSkillCounts)]);
-  }
-
-  function markSkill(name, ctx = lastCtx) {
-    if (!name) return;
-    currentSkills.add(name);
-    render(ctx);
-  }
-
-  function restoreSession(ctx) {
-    currentSkills = new Set();
-    sessionSkillCounts = new Map();
-    const entries = ctx?.sessionManager?.getBranch?.() || [];
-    for (const entry of entries) {
-      if (entry?.type !== "custom" || entry.customType !== ENTRY_TYPE) continue;
-      const counts = entry.data?.counts;
-      if (counts && typeof counts === "object" && !Array.isArray(counts)) {
-        for (const [name, amount] of Object.entries(counts)) addSkillCount(sessionSkillCounts, name, amount);
-      } else {
-        for (const name of entry.data?.skills || []) addSkillCount(sessionSkillCounts, name);
-      }
-    }
-    render(ctx);
-  }
-
-  function beginRequest(ctx) {
-    if (ctx?.isIdle?.() === false) return;
-    currentSkills = new Set();
-    activeMode = "auto";
-    lastPrompt = undefined;
-    render(ctx);
-  }
-
-  function observePrompt(prompt, options, ctx) {
-    const skills = options?.skills || [];
-    knownSkills = new Map(skills.map(skill => [skill.name, skill]));
-    for (const match of String(prompt || "").matchAll(/<skill name="([^"]+)" location="([^"]+)">/g)) {
-      if (knownSkills.size === 0 || knownSkills.has(match[1])) markSkill(match[1], ctx);
-    }
-  }
 
   function modeCommand(prefix, mode, args, ctx) {
     const request = args.trim();
@@ -168,24 +80,16 @@ export default function personalPiSkillsExtension(pi) {
       ctx.ui.notify(`下一条请求使用：${MODE_LABELS[mode]}`, "info");
       return;
     }
-    beginRequest(ctx);
     pi.sendUserMessage(`${prefix} ${request}`);
   }
 
   function showSkills(ctx) {
     const available = ctx.getSystemPromptOptions?.()?.skills || [];
     const availableNames = available.map(skill => skill.name).sort();
-    const message = [
-      `${ICON} 已发现: ${compactNames(availableNames)}`,
-      `观测: ${formatSkillCounts(sessionSkillCounts)}`,
-      `总使用次数: ${totalSkillUses(sessionSkillCounts)}`,
-      "观测到不等于模型一定遵守。",
-    ].join("\n");
-    ctx.ui.notify(message, "info");
+    ctx.ui.notify(`已发现 skills：${compactNames(availableNames)}`, "info");
   }
 
   async function syncUpstream(ctx) {
-    markSkill("syncing-upstream", ctx);
     if (!existsSync(SYNC_SCRIPT)) {
       ctx.ui.notify(`同步脚本不存在：${SYNC_SCRIPT}`, "error");
       return;
@@ -222,7 +126,7 @@ export default function personalPiSkillsExtension(pi) {
     handler: (args, ctx) => modeCommand("审查", "review", args, ctx),
   });
   pi.registerCommand("skills", {
-    description: "Show discovered and observed skills",
+    description: "Show discovered skills",
     handler: (_args, ctx) => showSkills(ctx),
   });
   pi.registerCommand("sync-skills", {
@@ -230,18 +134,10 @@ export default function personalPiSkillsExtension(pi) {
     handler: (_args, ctx) => syncUpstream(ctx),
   });
 
-  pi.on("session_start", async (_event, ctx) => {
-    lastCtx = ctx;
-    restoreSession(ctx);
-  });
-
-  pi.on("input", async (event, ctx) => {
+  pi.on("input", async event => {
     if (event.source === "extension") return;
     const text = String(event.text || "");
     const pendingMode = nextOverride;
-    beginRequest(ctx);
-    const skillCommand = text.match(/^\/skill:([a-z0-9-]+)/);
-    if (skillCommand) markSkill(skillCommand[1], ctx);
     if (text === "/debug" || text.startsWith("/debug ")) {
       return { action: "transform", text: `/skill:debugging-with-evidence ${text.slice(6).trim()}`.trim() };
     }
@@ -253,40 +149,10 @@ export default function personalPiSkillsExtension(pi) {
     }
   });
 
-  pi.on("before_agent_start", async (event, ctx) => {
-    lastCtx = ctx;
-    if (lastPrompt !== event.prompt) {
-      if (ctx.isIdle?.() !== false && currentSkills.size > 0) currentSkills = new Set();
-      lastPrompt = event.prompt;
-    }
-    const promptMode = getModeFromPrompt(event.prompt);
-    activeMode = promptMode || nextOverride || "auto";
+  pi.on("before_agent_start", async event => {
+    const activeMode = getModeFromPrompt(event.prompt) || nextOverride || "auto";
     nextOverride = undefined;
-    const options = event.systemPromptOptions || {};
-    observePrompt(event.prompt, options, ctx);
     const policy = buildPolicy(activeMode);
-    markSkill(ADAPTIVE_SKILL, ctx);
     return { systemPrompt: `${event.systemPrompt}\n\n${policy}` };
-  });
-
-  pi.on("tool_result", async (event, ctx) => {
-    if (event.toolName !== "read" || event.isError) return;
-    const name = skillNameFromPath(event.input?.path, knownSkills);
-    if (name && (knownSkills.has(name) || name === ADAPTIVE_SKILL || name === "syncing-upstream")) markSkill(name, ctx);
-  });
-
-  pi.on("agent_settled", async (_event, ctx) => {
-    if (currentSkills.size > 0) {
-      const skills = [...currentSkills].sort();
-      const counts = Object.fromEntries(skills.map(name => [name, 1]));
-      for (const name of skills) addSkillCount(sessionSkillCounts, name);
-      pi.appendEntry(ENTRY_TYPE, {
-        skills,
-        counts,
-        mode: activeMode,
-        timestamp: Date.now(),
-      });
-    }
-    render(ctx);
   });
 }
