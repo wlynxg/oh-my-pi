@@ -14,6 +14,11 @@ const SHARED_USER_TWO = "user-shared-second";
 const SHARED_REFRESH_TWO = "fixture-refresh-shared-second";
 const LUO_ALIAS = "luo";
 const NEW_ALIAS = "new";
+const EMAIL_ONE = `user-${ACCOUNT_ONE}@example.test`;
+const EMAIL_SHARED_TWO = `${SHARED_USER_TWO}@example.test`;
+const EMAIL_SHARED_WORKSPACES = "shared-mailbox@example.test";
+const COMMAND = "account";
+const STATUS_KEY = "codex-accounts";
 const ACCOUNT_HEADER = "ChatGPT-Account-Id";
 const EMPTY_USAGE = { primary_window: { used_percent: 28, limit_window_seconds: 18000, reset_at: 2000000000 }, secondary_window: { used_percent: 65, limit_window_seconds: 604800, reset_at: 2000600000 } };
 
@@ -392,7 +397,7 @@ test("/account save/list/usage/switch/remove 端到端命令接入", async () =>
     await f.store.switch("personal");
     const h = commandHarness(f.store);
     await h.commands.get("account").handler("list", h.context);
-    assert.match(h.notifications.at(-1)[0], /personal/);
+    assert.ok(h.notifications.at(-1)[0].includes(EMAIL_ONE));
     await h.commands.get("account").handler("usage", h.context);
     assert.match(h.notifications.at(-1)[0], /5h/);
     assert.match(h.notifications.at(-1)[0], /credits 0/);
@@ -424,7 +429,8 @@ test("同工作区两用户的命令列表、额度 header、切换及迟到响�
     } });
     h.auth = second;
     await h.commands.get("account").handler("list", h.context);
-    assert.match(h.notifications.at(-1)[0], /○ luo/); assert.match(h.notifications.at(-1)[0], /● new/);
+    assert.ok(h.notifications.at(-1)[0].includes(`○ ${EMAIL_ONE}`));
+    assert.ok(h.notifications.at(-1)[0].includes(`● ${EMAIL_SHARED_TWO}`));
     await h.commands.get("account").handler("usage", h.context);
     assert.equal(receivedWorkspace, ACCOUNT_ONE);
     assert.ok(f.store.readAccounts().accounts[secondId].usage);
@@ -435,6 +441,94 @@ test("同工作区两用户的命令列表、额度 header、切换及迟到响�
     await h.handlers.get("after_provider_response")({ status: 200, headers: { "x-codex-primary-used-percent": "99", "x-codex-primary-window-minutes": "300" } }, h.context);
     await h.handlers.get("provider_stream_event")({ provider: PROVIDER, data: { type: "codex.rate_limits", rate_limits: { primary: { used_percent: 99, window_minutes: 300 } } } }, h.context);
     assert.equal(f.store.readAccounts().accounts[IDENTITY_ONE].usage, undefined);
+  } finally { f.close(); }
+});
+
+test("邮箱覆盖所有账号展示，保留历史别名且只读列表和弹窗不改凭据", async () => {
+  const f = fixture();
+  try {
+    const h = commandHarness(f.store);
+    await h.commands.get(COMMAND).handler(`save ${LUO_ALIAS}`, h.context);
+    assert.ok(h.notifications.at(-1)[0].includes(EMAIL_ONE));
+    assert.ok(h.statuses.get(STATUS_KEY).includes(EMAIL_ONE));
+    assert.equal(h.statuses.get(STATUS_KEY).includes(LUO_ALIAS), false);
+    const beforeAuth = readFileSync(f.authPath, "utf8");
+    const beforeAccounts = readFileSync(f.store.accountsPath, "utf8");
+    await h.commands.get(COMMAND).handler("list", h.context);
+    assert.ok(h.notifications.at(-1)[0].includes(EMAIL_ONE));
+    let choices;
+    h.context.ui.select = async (_title, labels) => { choices = labels; return undefined; };
+    await h.commands.get(COMMAND).handler("switch", h.context);
+    assert.ok(choices[0].includes(EMAIL_ONE));
+    assert.equal(choices[0].includes(LUO_ALIAS), false);
+    const completion = h.commands.get(COMMAND).getArgumentCompletions(`switch ${EMAIL_ONE}`);
+    assert.equal(completion[0].value, `switch ${EMAIL_ONE}`);
+    assert.equal(completion[0].label, EMAIL_ONE);
+    assert.equal(readFileSync(f.authPath, "utf8"), beforeAuth);
+    assert.equal(readFileSync(f.store.accountsPath, "utf8"), beforeAccounts);
+    await h.commands.get(COMMAND).handler(`switch ${EMAIL_ONE}`, h.context);
+    assert.equal(h.reloads, 1);
+    assert.ok(h.notifications.at(-1)[0].includes(EMAIL_ONE));
+    assert.equal(f.store.readAccounts().accounts[IDENTITY_ONE].name, LUO_ALIAS);
+    let confirmation;
+    h.context.ui.confirm = async (_title, text) => { confirmation = text; return false; };
+    await h.commands.get(COMMAND).handler(`remove ${EMAIL_ONE}`, h.context);
+    assert.ok(confirmation.includes(EMAIL_ONE));
+  } finally { f.close(); }
+});
+
+test("新登录未保存时显示其邮箱和未保存标记，而不是冒用旧别名", async () => {
+  const f = fixture();
+  try {
+    await f.store.save(LUO_ALIAS);
+    const second = credential(ACCOUNT_ONE, SHARED_REFRESH_TWO, Date.now() + 3600000, SHARED_USER_TWO);
+    loginAs(f, second);
+    const h = commandHarness(f.store);
+    await h.commands.get(COMMAND).handler("list", h.context);
+    assert.ok(h.notifications.at(-1)[0].includes(`${EMAIL_SHARED_TWO}（未保存）`));
+    assert.ok(h.statuses.get(STATUS_KEY).includes(`${EMAIL_SHARED_TWO}（未保存）`));
+    assert.equal(Object.keys(f.store.readAccounts().accounts).length, 1);
+    await h.commands.get(COMMAND).handler("save", h.context);
+    assert.ok(h.notifications.at(-1)[0].includes(EMAIL_SHARED_TWO));
+    assert.equal(f.store.readAccounts().accounts[credentialInfo(second).id].name, EMAIL_SHARED_TWO);
+    assert.equal(Object.keys(f.store.readAccounts().accounts).length, 2);
+  } finally { f.close(); }
+});
+
+test("同邮箱多个工作区拒绝歧义，弹窗选项和补全提交值保持可区分", async () => {
+  const f = fixture();
+  try {
+    const first = credential(ACCOUNT_ONE);
+    first.access = token(ACCOUNT_ONE, EMAIL_SHARED_WORKSPACES);
+    loginAs(f, first); await f.store.save(LUO_ALIAS);
+    const second = credential(ACCOUNT_TWO);
+    second.access = token(ACCOUNT_TWO, EMAIL_SHARED_WORKSPACES);
+    loginAs(f, second); await f.store.save(NEW_ALIAS);
+    const h = commandHarness(f.store);
+    await h.commands.get(COMMAND).handler(`switch ${EMAIL_SHARED_WORKSPACES}`, h.context);
+    assert.match(h.notifications.at(-1)[0], /多个账号/);
+    assert.equal(h.reloads, 0);
+    let labels;
+    h.context.ui.select = async (_title, values) => { labels = values; return values[1]; };
+    await h.commands.get(COMMAND).handler("switch", h.context);
+    assert.equal(new Set(labels).size, 2);
+    assert.equal(f.store.current().accountId, ACCOUNT_TWO);
+    const completion = h.commands.get(COMMAND).getArgumentCompletions(`switch ${EMAIL_SHARED_WORKSPACES}`);
+    assert.equal(new Set(completion.map(item => item.value)).size, 2);
+    assert.equal(new Set(completion.map(item => item.label)).size, 2);
+  } finally { f.close(); }
+});
+
+test("取不到邮箱时明确标记未知，不推测邮箱、不改写别名", async () => {
+  const f = fixture();
+  try {
+    const active = credential(ACCOUNT_ONE);
+    active.access = `header.${Buffer.from(JSON.stringify({ [TOKEN_CLAIM]: { chatgpt_account_id: ACCOUNT_ONE, chatgpt_user_id: `user-${ACCOUNT_ONE}` } })).toString("base64url")}.signature`;
+    loginAs(f, active); await f.store.save(LUO_ALIAS);
+    const h = commandHarness(f.store);
+    await h.commands.get(COMMAND).handler("list", h.context);
+    assert.ok(h.notifications.at(-1)[0].includes(`${LUO_ALIAS}（邮箱未知）`));
+    assert.equal(f.store.readAccounts().accounts[IDENTITY_ONE].name, LUO_ALIAS);
   } finally { f.close(); }
 });
 

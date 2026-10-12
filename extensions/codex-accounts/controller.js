@@ -1,4 +1,4 @@
-import { PROVIDER } from "./storage.js";
+import { PROVIDER, credentialInfo } from "./storage.js";
 import { formatQuota, formatReport, isExhausted, parseHeaders, parseRateEvent, queryUsage } from "./usage.js";
 import { GO_PROVIDER, formatGoQuota, formatGoReport, queryGoUsage, resolveGoAuth } from "./opencode-go.js";
 
@@ -11,7 +11,17 @@ const ERROR = "error";
 const WARNING = "warning";
 const HELP = "/account [save 名称 | switch 名称 | list | remove 名称 | usage]\n先 /login openai-codex，再 /account save；添加另一账号前请先保存当前登录。";
 const UNSAVED = "未保存";
+const UNKNOWN_EMAIL = "邮箱未知";
 const TUI_MODE = "tui";
+
+function emailLabel(email, fallback) {
+  return email ?? (fallback ? `${fallback}（${UNKNOWN_EMAIL}）` : UNKNOWN_EMAIL);
+}
+
+function accountLabel(credential, fallback) {
+  // 从凭据显示真实邮箱，历史别名不能用来判断登录身份。
+  return emailLabel(credentialInfo(credential).email, fallback);
+}
 
 export function registerAccounts(pi, store, { fetchImpl = globalThis.fetch } = {}) {
   let latestUsage;
@@ -64,10 +74,12 @@ export function registerAccounts(pi, store, { fetchImpl = globalThis.fetch } = {
     try {
       const { current, accounts } = store.view();
       if (!current) { clear(ctx); return; }
-      const name = accounts[current.id]?.name ?? UNSAVED;
+      const entry = accounts[current.id];
+      const label = accountLabel(current.credential, entry?.name);
+      const unsaved = entry ? "" : `（${UNSAVED}）`;
       const report = quota(current.id, accounts);
       const time = report ? ` · 快照 ${new Date(report.capturedAt).toLocaleTimeString()}` : "";
-      ctx.ui.setStatus(STATUS_KEY, `👤 ${name} · ${formatQuota(report)}${time}`);
+      ctx.ui.setStatus(STATUS_KEY, `👤 ${label}${unsaved} · ${formatQuota(report)}${time}`);
     } catch (error) {
       clear(ctx);
       throw error;
@@ -78,9 +90,11 @@ export function registerAccounts(pi, store, { fetchImpl = globalThis.fetch } = {
     const { current, accounts } = store.view();
     const lines = Object.entries(accounts).map(([id, entry]) => {
       const report = quota(id, accounts);
-      return `${id === current?.id ? "●" : "○"} ${entry.name} · ${formatQuota(report)}${report ? `（缓存 ${new Date(report.capturedAt).toLocaleString()}）` : ""}`;
+      const active = id === current?.id;
+      const label = accountLabel(active ? current.credential : entry.credential, entry.name);
+      return `${active ? "●" : "○"} ${label} · ${formatQuota(report)}${report ? `（缓存 ${new Date(report.capturedAt).toLocaleString()}）` : ""}`;
     });
-    if (current && !accounts[current.id]) lines.unshift(`● 当前登录${UNSAVED}，请先 /account save。`);
+    if (current && !accounts[current.id]) lines.unshift(`● ${accountLabel(current.credential)}（${UNSAVED}），请先 /account save。`);
     notify(ctx, lines.join("\n") || "尚无已保存账号，请先 /login openai-codex，再 /account save。");
     await refresh({}, ctx);
   }
@@ -89,13 +103,18 @@ export function registerAccounts(pi, store, { fetchImpl = globalThis.fetch } = {
     const accounts = store.readAccounts().accounts;
     const entries = Object.entries(accounts);
     if (suppliedName) {
-      const match = Object.hasOwn(accounts, suppliedName) ? [suppliedName, accounts[suppliedName]] : entries.find(([, entry]) => entry.name === suppliedName);
-      if (!match) throw new Error("没有找到已保存的账号，先执行 /account list。");
-      return match[0];
+      if (Object.hasOwn(accounts, suppliedName)) return suppliedName;
+      const matches = entries.filter(([, entry]) => entry.name === suppliedName || credentialInfo(entry.credential).email === suppliedName);
+      if (matches.length > 1) throw new Error("该邮箱或别名对应多个账号，请使用 /account 选择具体工作区。");
+      if (!matches.length) throw new Error("没有找到已保存的账号，先执行 /account list。");
+      return matches[0][0];
     }
     if (!entries.length) throw new Error("尚无已保存账号，请先 /account save。");
     if (!ctx.hasUI) throw new Error("非交互模式请显式指定账号名称。");
-    const labels = entries.map(([id, entry]) => `${entry.name} · ${formatQuota(quota(id, accounts))}`);
+    const labels = entries.map(([id, entry], index) => {
+      const identity = credentialInfo(entry.credential);
+      return `${index + 1}. ${accountLabel(entry.credential, entry.name)} · 工作区 ${identity.accountId.slice(0, 8)} · ${formatQuota(quota(id, accounts))}`;
+    });
     const selected = await ctx.ui.select(action, labels);
     return selected === undefined ? undefined : entries[labels.indexOf(selected)]?.[0];
   }
@@ -142,7 +161,7 @@ export function registerAccounts(pi, store, { fetchImpl = globalThis.fetch } = {
     const report = await queryUsage(active.credential, active.accountId, fetchImpl);
     await record(active.id, report, ctx);
     const entry = store.readAccounts().accounts[active.id];
-    notify(ctx, `${entry?.name ?? UNSAVED}\n${formatReport(report)}`);
+    notify(ctx, `${accountLabel(active.credential, entry?.name)}\n${formatReport(report)}`);
   }
 
   pi.registerCommand(COMMAND, {
@@ -152,8 +171,16 @@ export function registerAccounts(pi, store, { fetchImpl = globalThis.fetch } = {
       const operation = match?.[1] ?? "";
       if (!prefix.includes(" ")) return OPERATIONS.filter((name) => name.startsWith(operation)).map((name) => ({ value: name, label: name }));
       if (!OPERATIONS.slice(1, 4).includes(operation) || operation === "list") return null;
-      const names = Object.values(store.readAccounts().accounts).map((entry) => entry.name);
-      return names.filter((name) => name.startsWith(match?.[2] ?? "")).map((name) => ({ value: `${operation} ${name}`, label: name }));
+      const entries = Object.entries(store.readAccounts().accounts).map(([id, entry]) => ({ id, entry, email: credentialInfo(entry.credential).email }));
+      const query = match?.[2] ?? "";
+      return entries.filter(({ entry, email }) => entry.name.startsWith(query) || email?.startsWith(query)).map(({ id, entry, email }, index) => {
+        const uniqueEmail = email && entries.filter(candidate => candidate.email === email).length === 1;
+        const label = accountLabel(entry.credential, entry.name);
+        return {
+          value: `${operation} ${uniqueEmail ? email : id}`,
+          label: uniqueEmail ? label : `${index + 1}. ${label} · 工作区 ${credentialInfo(entry.credential).accountId.slice(0, 8)}`,
+        };
+      });
     },
     async handler(args, ctx) {
       const match = args.trim().match(/^(\S+)(?:\s+([\s\S]*))?$/);
@@ -162,7 +189,7 @@ export function registerAccounts(pi, store, { fetchImpl = globalThis.fetch } = {
       try {
         if (operation === "save") {
           const saved = await store.save(name);
-          notify(ctx, `已保存 Codex 账号：${saved.name}。`);
+          notify(ctx, `已保存 Codex 账号：${emailLabel(saved.email, saved.name)}。`);
           await refresh({}, ctx);
         } else if (operation === "switch" || !operation) {
           if (!ctx.isIdle()) throw new Error("请先按 Esc 停止当前请求，待会话空闲后切换账号。");
@@ -174,7 +201,7 @@ export function registerAccounts(pi, store, { fetchImpl = globalThis.fetch } = {
           // Pi 1.1 按文件版本重读 auth；刷新模型可用性后重载，保留原始 expires。
           const result = await ctx.modelRegistry.refresh({ providers: [PROVIDER], allowNetwork: false });
           if (result.errors?.has(PROVIDER)) throw new Error("登录槽已切换，但模型可用性刷新失败；旧账号已保存，可手动切回。");
-          notify(ctx, `已全局切换至 ${selected.name}，正在重载；其他会话的新请求也会使用此账号。`);
+          notify(ctx, `已全局切换至 ${emailLabel(selected.email, selected.name)}，正在重载；其他会话的新请求也会使用此账号。`);
           await ctx.reload();
           return; // 不复用已经失效的扩展上下文。
         } else if (operation === "list") {
@@ -186,7 +213,7 @@ export function registerAccounts(pi, store, { fetchImpl = globalThis.fetch } = {
           if (id === undefined) return;
           if (!ctx.hasUI) throw new Error("移除快照需要交互确认，请在 Pi 界面执行。");
           const entry = store.readAccounts().accounts[id];
-          if (!await ctx.ui.confirm("移除账号快照", `仅删除 ${entry.name} 的本地快照，不退出当前登录、不撤销平台凭据。`)) return;
+          if (!await ctx.ui.confirm("移除账号快照", `仅删除 ${accountLabel(entry.credential, entry.name)} 的本地快照，不退出当前登录、不撤销平台凭据。`)) return;
           await store.remove(id);
           if (latestUsage?.id === id) latestUsage = undefined;
           notify(ctx, "已移除快照；当前 auth.json 登录未改变。");

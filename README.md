@@ -140,7 +140,7 @@ pi install git:github.com/wlynxg/oh-my-pi@main
 /account usage
 ```
 
-支持 `/account`（打开选择器）、`save [名称]`、`switch [名称]`、`list`、`remove [名称]`、`usage`。不写名称时优先用当前登录邮箱，取不到时使用快照键。快照以 **用户身份＋工作区** 识别：用户优先取 OAuth token 中的 `chatgpt_user_id`，其次 `user_id`／`sub`；`chatgpt_account_id` 是组织／工作区 ID，不能单独用它去重。同工作区不同用户分别保存，同一用户 token 轮换或邮箱变化不会仅因此生成重复快照。原生 OAuth 的 `accountId` 与额度请求 header 仍保留工作区 ID。
+支持 `/account`（打开选择器）、`save [名称]`、`switch [名称]`、`list`、`remove [名称]`、`usage`。`/account save` 不必填写名称：首次保存优先使用登录邮箱，已有别名保留。列表、切换弹窗、状态栏及操作提示优先显示凭据中的真实邮箱，而不是历史别名；取不到邮箱时明确标记“邮箱未知”并显示已有名称。切换／移除可使用邮箱或原别名；同一邮箱有多个工作区时不猜选，使用 `/account` 弹窗选择。快照以 **用户身份＋工作区** 识别：用户优先取 OAuth token 中的 `chatgpt_user_id`，其次 `user_id`／`sub`；`chatgpt_account_id` 是组织／工作区 ID，不能单独用它去重。同工作区不同用户分别保存，同一用户 token 轮换或邮箱变化不会仅因此生成重复快照。原生 OAuth 的 `accountId` 与额度请求 header 仍保留工作区 ID。
 
 **旧快照升级：** 修复版本写入 v2 格式。读取 v1 时只在内存转换，保留名称、凭据、保存时间和额度快照，不立即改文件；后续确需保存、同步、切换、删除或额度写入时，在原锁与原子保存边界落盘 v2。用户身份缺失、格式或键不匹配时明确报错并保留原文件，不用邮箱猜测、不删除无法识别的条目。旧版本已经覆盖丢失的凭据无法自动恢复。
 

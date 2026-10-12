@@ -167,7 +167,7 @@ export class AccountStore {
     validName(name);
     const now = Date.now();
     store.accounts[id] = { ...existing, name, credential: structuredClone(credential), savedAt: existing?.savedAt ?? now, updatedAt: now };
-    return { id, name };
+    return { id, name, email };
   }
 
   async save(name) {
@@ -213,7 +213,7 @@ export class AccountStore {
       atomicWrite(this.accountsPath, store);
       check();
       atomicWrite(this.authPath, { ...auth, [PROVIDER]: store.accounts[id].credential });
-      return { id, name: store.accounts[id].name };
+      return { id, name: store.accounts[id].name, email: credentialInfo(store.accounts[id].credential).email };
     });
   }
 
